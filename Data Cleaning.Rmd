@@ -1,0 +1,111 @@
+---
+title: "Data Analyst Challenge"
+author: "Jorge Ferreira"
+output:
+  html_document: default
+---
+
+# PART 1  
+
+## ETL  
+
+Both *issues* and *issuesHistory* csv files will be cleaned and loaded into Snowflake, so any business user can properly investigate them.
+```{R warning = FALSE}
+library(readr)
+issues <- read.csv("~/Desktop/Tests/Outsystems/issues.csv")
+head(issues)
+```
+Starting with the *issues.csv* file... Does it have any missing data? 
+```{R warning = FALSE}
+sum(is.na(issues))
+length(duplicated(issues)[duplicated(issues)=="TRUE"])
+```
+There are no missing values and all observations are unique.
+But dates in **Created** are not in the right format, so that needs to be amended.
+```{R warning = FALSE}
+issues$Created <- gsub(",","",issues$Created)
+issues$Created <- as.POSIXct(issues$Created, format = "%d/%m/%Y %H:%M", tz="GMT")
+issues$Key <- as.character(issues$Key)
+str(issues)
+```
+In total, there were `r nrow(issues)` issues created between `r min(issues$Created)` and `r max(issues$Created)`. And the *issues.csv* file is ready to be loaded into Snowflake. 
+
+```{R warning = FALSE}
+write.csv(issues, "~/Desktop/issues.csv", row.names = FALSE, quote = FALSE)
+```
+
+Now let's take a look at the *issuesHistory.csv* file and see what kind of cleaning it requires. As the file was being read into R, I identified a typo in row number 11918 which prevented it to proceed properly. So, I fixed it manually, saved it as *issuesHistory.xlsx* and used the *read_xlsx* function from the *readxl* library.
+```{R warning = FALSE}
+library(readxl)
+history <- read_xlsx("~/Desktop/Tests/Outsystems/issuesHistory.xlsx")
+history <- as.data.frame(history)
+```
+Dates in **Created** have the same format problem as in the *issues* file, so will treat them the same way.
+```{R warning = FALSE}
+history$Created <- gsub(",","",history$Created)
+history$Created <- as.POSIXct(history$Created, format = "%d/%m/%Y %H:%M", tz="GMT")
+str(history)
+```
+Now let's investigate the dataset further. Does it have missing values?
+```{R warning = FALSE}
+sum(is.na(history))
+history[rowSums(is.na(history)) > 0, colSums(is.na(history)) > 0]
+```
+This time we have `r sum(is.na(history))` missing values across `r nrow(history[rowSums(is.na(history)) > 0,])` observations. The first two rows belong to *Issue DFO-444*. Allow me to check all its records as we might find a way to fill in those NAs.
+```{R warning = FALSE}
+history[history$Issue=="DFO-444",]
+```
+By coincidence, the rows which have NAs are duplicated, as their **History Id** repeats. Also, the last two rows with missing values are not relevant either, so we can drop them all.
+```{R warning = FALSE}
+history <- na.omit(history)
+sum(is.na(history))
+length(duplicated(history)[duplicated(history)=="TRUE"])
+```
+Apparenty, still have a duplicated value. And once again, belongs to *Issue DFO-444*. Let's get rid of it. 
+```{R warning = FALSE}
+history[duplicated(history),]
+history <- unique(history)
+length(unique(history$`History Id`))
+```
+But I am not too sure about all these unique rows... There are observations where **Issues' Status** don't change, yet get a different **History Id**. 
+```{R warning = FALSE}
+head(history[history$From==history$To,])
+```
+It doesn't feel right to me. So, I am going to get rid of these rows too.
+```{R warning = FALSE}
+history <- history[history$From!=history$To,]
+```
+In the end, we have `r nrow(history)` observations for *issuesHistory*. Although it looks like it is ready to be loaded into Snowflake, I don't find it very friendly to have different names for the same **From** or **To** IDs, as we can see below:
+```{R warning = FALSE}
+table(history[history$From=='10401',]$From,history[history$From=='10401',]$`From String`)
+```
+For example, for *Issue 10401* we see three different **From Strings**: *Estimated & Ready*, *READY* and *Ready*. Does this happen very often? Below there is a table counting the number of different names each **From** ID has:
+```{R warning = FALSE, message = FALSE}
+aggregate(data=history, `From String`~From, function(x) length(unique(x)))
+```
+It could be OKish to keep it like this, as a business user can always filter or select records by their **From** or **To** IDs, but I guess would be better to standardize it - I will use the most popular names. 
+However, because they might contain relevant information (such as *PO Accepted* or *Estimated*), I will save all their former names into two new columns: **From Comments** and **To Comments**. 
+```{R warning = FALSE, message = FALSE}
+library(dplyr)
+#Creation of comments columns
+history$`From Comments` <- history$`From String`
+history$`To Comments` <- history$`To String`
+
+#Replacement of From/To Strings by their most popular names 
+history <- history %>% group_by(From) %>% mutate (`From String`=names(which.max(table(`From String`)))) %>% ungroup()
+history <- history %>% group_by(To) %>% mutate (`To String`=names(which.max(table(`To String`)))) %>% ungroup()
+
+#If names are the same, there's no need to add any comment. Otherwise, let's keep this information
+history$`From Comments` <- ifelse(history$`From Comments`==history$`From String`,"No Comments",history$`From Comments`)
+history$`To Comments` <- ifelse(history$`To Comments`==history$`To String`,"No Comments",history$`To Comments`)
+
+head(as.data.frame(history))
+```
+
+The files are cleaned and ready to be loaded into Snowflake for further analysis and business use.
+```{R warning = FALSE, message = FALSE, echo = FALSE}
+history$`To Comments` <- gsub(",","",history$`To Comments`)
+```
+```{R warning = FALSE, message = FALSE}
+write.csv(history, "~/Desktop/history.csv", row.names = FALSE, quote = FALSE)
+```
