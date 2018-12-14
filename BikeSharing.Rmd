@@ -1,0 +1,161 @@
+---
+title: "Bike Sharing Demand"
+author: "Jorge Ferreira"
+output:
+  html_document: default
+---
+
+I will start by reading in the data and assign it to the *bike* variable, so we can see what features we are going to work with.
+
+```{r warning = FALSE, message = FALSE}
+library(readr)
+library(ggplot2)
+library(ggExtra)
+library(RColorBrewer)
+library(dplyr)
+
+bike <- as.data.frame(read_csv("~/Desktop/bikeshare.csv"))
+head(bike)
+```
+
+The dataset has the following features:
+
+* Datetime - hourly date + timestamp
+* Season - 1 = spring, 2 = summer, 3 = fall, 4 = winter
+* Holiday - whether the day is considered a holiday
+* Workingday - whether the day is neither a weekend nor holiday
+* Weather
+    + 1 = Clear, Few clouds, Partly cloudy, Partly cloudy
+    + 2 = Mist + Cloudy, Mist + Broken clouds, Mist + Few clouds, Mist
+    + 3 = Light Snow, Light Rain + Thunderstorm + Scattered clouds, Light Rain + Scattered clouds
+    + 4 = Heavy Rain + Ice Pallets + Thunderstorm + Mist, Snow + Fog
+* Temp - temperature in Celsius
+* Atemp - "feels like" temperature in Celsius
+* Humidity - relative humidity
+* Windspeed - wind speed
+* Casual - number of non-registered user rentals initiated
+* Registered - number of registered user rentals initiated
+* Count - number of total rentals  
+
+Before diving in, we need to have in mind the business problem - we want to predict the number of bike rentals per day. So, it is good practice to formulate a few hypothesis beforehand and think about what features could influence the demand of bikes:
+
+* Hourly trend: There must be high demand during commuting timings. Early morning and late evening might exhibit a different trend than 10pm-4am, when demand is likely to be low.
+* Daily trend: Users demand more bikes on weekdays as compared to weekends or holiday.
+* Rain: The demand of bikes will be lower on a rainy day than on a sunny one.
+* Temperature: I would expect demand to follow a bell shape curve, recording low demand at extreme temperatures and high demand at mild temperatures.
+* Time: Demand is expected to follow a positive trend as the business matures and more users get registered, or struggle due to competition.
+
+Back to our dataset, it seems it is pretty cleaned already. But just to double check, are there any missing values and duplicates?
+
+```{r warning = FALSE, message = FALSE}
+sum(is.na(bike))
+length(duplicated(bike)[duplicated(bike)=="TRUE"])
+```
+
+It looks like we're good to go!
+So, let's investigate our hypothesis... is there a hourly trend? If there is, I believe it is different on weekdays vs weekends/holidays. Therefore, we should take that into consideration.
+
+```{r warning = FALSE, message = FALSE, fig.align = "center", fig.width=9}
+bike$hour <- sapply(bike$datetime,function(x){format(x,"%H")})
+bike_by_hour <- bike %>% group_by(hour, workingday) %>% summarise(total = sum(count))
+bike_by_hour$workingday <- ifelse(bike_by_hour$workingday==0,"Weekend/Holiday", "Workingday")
+ggplot(data=bike_by_hour, aes(x=hour, y=total, group=1)) +
+  geom_line(stat="identity", color="#37c9e1") + xlab("Hour") + facet_grid(~workingday) + theme_bw() + removeGrid()
+```
+
+As expected, on weekdays there are two peaks, representing commuting times. On weekends, demand is lower and smoother.
+
+And how does it relate with temperature?
+
+```{r warning = FALSE, message = FALSE, fig.align = "center", fig.width=9}
+bike$day <- ifelse(bike$workingday==0,"Weekend/Holiday", "Workingday")
+ggplot(filter(bike),aes(hour,count)) + geom_point(position=position_jitter(w=1, h=0),aes(color=temp),alpha=0.5) + scale_color_gradientn(colours = c('dark blue','blue','light blue','light green','yellow','orange','red')) + theme_bw() + removeGrid() + facet_grid(~day)
+```
+
+Typically, users ride their bikes when the temperature is mild. Especially on weekends. On working days, there are still a few users who like to commute by bike regardless of temperature. 
+
+Therefore, I it is likely that demand will also fluctuate depending on the season of the year.
+
+```{r warning = FALSE, message = FALSE, fig.align = "center"}
+ggplot(bike, aes(factor(season),count, fill=factor(season))) + geom_boxplot() + theme_bw() + removeGrid() + scale_fill_manual(breaks = c("1", "2", "3", "4"), values=c("springgreen3", "yellow2", "tan3", "dodgerblue3")) + xlab("Season") + labs(fill = "Season")
+```
+
+In the Summer and Fall demand is higher. I was expecting to see a stronger Spring though. It is even lower than the Winter? How come? It leads me to my hypothesis about time.
+
+```{r warning = FALSE, message = FALSE, fig.align = "center"}
+ggplot(bike, aes(datetime, count)) + geom_point(aes(color=factor(season)), alpha=0.5) + scale_color_manual(breaks = c("1", "2", "3", "4"), values=c("springgreen3", "yellow2", "tan3", "dodgerblue3")) + theme_bw() + removeGrid() + labs(fill = "Season")
+```
+
+The company starts its operations in the Spring 2011 and, as time passed by, it reached a more mature state by the end of the year, having collected more subscriptions in the Winter. And in the following year, the trend goes.
+
+Therefore, we have confirmed two phenomena: 
+* The data has seasonality, for winter and summer. 
+* Bike rentals are increasing in general. 
+
+This may present a problem with using a linear regression model if the data is non-linear. 
+
+```{r warning = FALSE, message = FALSE}
+cor(bike[6:9])
+```
+
+Temp and atemp are highly correlated, so will use temp only to avoid multicollinearity.
+
+```{r warning = FALSE, message = FALSE}
+library(caTools)
+bike$hour <- as.numeric(bike$hour)
+bike_vars <- select(bike, season, holiday, workingday, weather, temp, humidity, windspeed, hour, count)
+
+sample <- sample.split(bike_vars$count, SplitRatio = 0.7)
+train <- subset(bike_vars, sample == TRUE)
+test <- subset(bike_vars, sample == FALSE)
+
+lm_model <- lm(formula = count ~ . , data = bike_vars)
+summary(lm_model)
+```
+
+We have quite a few variables which are not statistically significant. Hence, let's see what variables our step() function suggest t improve our model.
+```{r warning = FALSE, message = FALSE}
+lm_model2 <- step(lm_model)
+sml <- summary(lm_model2)
+```
+
+Based on AIC improvement, *lmodel2* is the winner. We get a simpler model, which works with statistically significant features. However, it doesn't really perform well either. 
+
+```{r warning = FALSE, message = FALSE}
+test$predictedCOUNT <- predict(lm_model2, newdata=test, type = "response")
+cor(test$count,test$predictedCOUNT)
+mean(sml$residuals^2)
+min_max_accuracy <- mean(apply(test[,9:10], 1, min) / apply(test[,9:10], 1, max))  
+```
+
+According to our R-squared, the model only explains around 33% of total variability. The correlation between predictions and actual values and the Mean Standard Error is too high. The Min/Max Accuracy is too low, suggesting our model's prediction is off.
+
+The above linear model is unable to take into account the seasonality and growth (towards the winter season) of our data. So, let's try to predict bike rentals with a non-linear model, such as Decision Trees.
+
+```{r warning = FALSE, message = FALSE, fig.align = "center"}
+library(rpart)
+tree <- rpart(count ~ . , data= train)
+library(rpart.plot)
+prp(tree)
+test$treepreds <- predict(tree, test)
+SSE = sum((test$treepreds - test$count)^2)
+SST = sum((mean(test$count) - test$count)^2)
+R2 = 1 - SSE/SST
+R2
+```
+
+Hour seems to be the most effective predictor with our new model and it looks like Decision Trees increased our R-Squared significantly. And one can beef up this model by running a Random Forest.
+
+```{r warning = FALSE, message = FALSE}
+library(randomForest)
+forest <- randomForest(count ~ .,   data=train)
+
+test$randomF <- predict(forest,test)
+SSE_RF = sum((test$randomF - test$count)^2)
+SST = sum((mean(test$count) - test$count)^2)
+R2_RF = 1 - SSE_RF/SST
+R2_RF
+head(test)
+```
+
+R-Squared improved even further with this *Decision Tree on steroids* model and seems to be the best one to predict future bike rentals. 
