@@ -1,0 +1,109 @@
+---
+title: "Moneyball"
+author: "Jorge Ferreira"
+output:
+  html_document: default
+---
+
+To tackle this challenge, we are provided with two datasets: players historical stats and salaries. Let's take a look at them.
+
+```{r warning = FALSE, message = FALSE}
+library(readr)
+batting <- read.csv('~/Desktop/Moneyball/Batting.csv')
+head(batting)
+salaries <- read.csv('~/Desktop/Moneyball/Salaries.csv')
+head(salaries)
+```
+
+There are plenty of metrics that help us analysing players' performance but we will be focusing on a few of them only, whicih we still need to calculate:
+
+* [Batting Average](https://en.wikipedia.org/wiki/Batting_average)
+* [On Base Percentage](https://en.wikipedia.org/wiki/On-base_percentage)
+* [Slugging Percentage](https://en.wikipedia.org/wiki/Slugging_percentage)
+
+```{r warning = FALSE, message = FALSE}
+# Batting Average
+batting$BA <- batting$H / batting$AB
+
+# On Base Percentage
+batting$OBP <- (batting$H + batting$BB + batting$HBP)/(batting$AB + batting$BB + batting$HBP + batting$SF)
+
+# Creating X1B (Singles) for Slugging Percentage calculation
+batting$X1B <- batting$H - batting$X2B - batting$X3B - batting$HR
+
+# Slugging Average (SLG)
+batting$SLG <- ((1 * batting$X1B) + (2 * batting$X2B) + (3 * batting$X3B) + (4 * batting$HR) ) / batting$AB
+```
+
+In 2001, we lost Giambja01, Damonjo01 and Saenzol01, who were at the peak of their performance.
+```{r warning = FALSE, message = FALSE, fig.align = "center"}
+library(ggplot2)
+library(ggExtra)
+GDS <- subset(batting,playerID %in% c('giambja01','damonjo01','saenzol01'))
+ggplot(data=GDS[GDS$yearID<2001,], aes(x=yearID, y=BA, group=1)) +
+  geom_line(stat="identity", color="green4") + xlab("Year") + facet_grid(~playerID) + theme_bw() + removeGrid() + ggtitle("Batting Average (1994-2001)")
+ggplot(data=GDS[GDS$yearID<2001,], aes(x=yearID, y=OBP, group=1)) +
+  geom_line(stat="identity", color="green4") + xlab("Year") + facet_grid(~playerID) + theme_bw() + removeGrid() + ggtitle("On Base Percentage (1994-2001)")
+ggplot(data=GDS[GDS$yearID<2001,], aes(x=yearID, y=SLG, group=1)) +
+  geom_line(stat="identity", color="green4") + xlab("Year") + facet_grid(~playerID) + theme_bw() + removeGrid() + ggtitle("Slugging Percentage (1994-2001)")
+```
+
+As salary is a key condition in our quest for potential players, is useful to merge both datasets.
+```{r warning = FALSE, message = FALSE}
+data <- merge(batting,salaries,by=c('playerID','yearID'))
+```
+
+Although we have data since `r min(data$yearID)`, we only care about the year of 2001.
+```{r warning = FALSE, message = FALSE}
+data <- subset(data, data$yearID==2001)
+```
+
+How are these players performing? 
+```{r warning = FALSE, message = FALSE, fig.align = "center"}
+data$lost_players <- ifelse(data$playerID == "giambja01" | data$playerID == "damonjo01" | data$playerID == "saenzol01", "Lost_Players", "Available_Players")
+mycolors         <- c("Lost_Players" = "green4", "Available_Players" = "grey87")
+
+ggplot(data = data, aes(x = OBP, y = salary)) +
+  geom_point(size = 1, aes(colour = lost_players)) +
+  scale_color_manual("Status", values = mycolors) + theme_minimal()
+```
+
+In green we can see our lost players and in grey the ones we have available on the market. 
+Let's see how the players we lost performed that season
+```{r warning = FALSE, message = FALSE}
+lost_players <- subset(data,playerID %in% c('giambja01','damonjo01','saenzol01'))
+lost_players <- lost_players[,c('playerID','H','X2B','X3B','HR','OBP','SLG','BA','AB')]
+head(lost_players)
+```
+
+We have a lot of players who have 0% of OBP. It might mean that they haven't had the chance to show their skills as they haven't played yet. The same rational for 100% OBP, meaning they might have played once and were lucky enough to perform too well.
+
+Now we have to find replacement players for the key three players we lost! However, you have three constraints:
+
+* The total combined salary of the three players can not exceed 15 million dollars.
+* Their combined number of At Bats (AB) needs to be equal to or greater than the lost players.
+* Their mean OBP had to equal or be greater than the mean OBP of the lost players
+
+So, am going to highlight potential players who we can consider:
+
+* Will set our max salary at 8M$
+* OBP should be higher than `r mean(lost_players$OBP)`
+* Will look at the ones whose AB is around 500 (`r sum(lost_players$AB)`/3)
+
+```{r warning = FALSE, message = FALSE, out.width=c('50%', '50%'), fig.show='hold'}
+avail.players <- subset(data, !(playerID %in% c('giambja01','damonjo01','saenzol01')))
+#OBP vs Salary
+ggplot(avail.players,aes(x=OBP,y=salary)) + geom_point() + geom_rect(data=avail.players, mapping=aes(xmin=0.367, xmax=0.5, ymin=0, ymax=8000000), color="red", alpha=0) + theme_minimal() + ggtitle("Players OBP vs Salary (2001)")
+#Aggregate AB should be above 1469, so let's set individual AB at around 500.
+ggplot(avail.players,aes(x=AB,y=salary)) + geom_point() + ggtitle("Players AB vs Salary (2001)") + geom_rect(data=avail.players, mapping=aes(xmin=500, xmax=700, ymin=0, ymax=8000000), color="red", alpha=0) + theme_minimal()
+```
+
+By filtering these players and sorting them, we can make a decision who to sign in next:
+```{r warning = FALSE, message = FALSE}
+library(dplyr)
+potential_players <- subset(avail.players, salary<8000000 & OBP>0.367 & AB>500)
+potential_players_resume <- potential_players[,c('playerID','OBP','AB','salary','BA','SLG')]
+head(arrange(potential_players_resume,desc(OBP),desc(AB),desc(BA),desc(SLG),salary),10)
+```
+
+I would chose Heltoto01, Berkmla01 and Gonzalu01!
