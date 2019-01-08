@@ -1,0 +1,271 @@
+---
+title: "Predicting Customer Churn"
+author: "Jorge Ferreira"
+output:
+  html_document: default
+---
+
+Let's start by reading in the dataset so we can investigate all customers' attributes.
+
+```{r warning = FALSE, message = FALSE}
+churn <- read.csv('~/Desktop/Telco Customer Churn.csv')
+head(churn)
+dim(churn)
+```
+
+We have access to information on `r dim(churn)[1]` clients, with `r dim(churn)[2]` attributes. 
+
+The dataset provides us the features below:
+
+* customerID
+* gender (female, male)
+* SeniorCitizen: whether the customer is a senior citizen or not (1, 0)
+* Partner: whether the customer has a partner or not (Yes, No)
+* Dependents: whether the customer has dependents or not (Yes, No)
+* Tenure: number of months the customer has stayed with the company
+* PhoneService: whether the customer has a phone service or not (Yes, No)
+* MultipleLines: whether the customer has multiple lines or not (Yes, No, No phone service)
+* InternetService: customers internet service provider (DSL, Fiber optic, No)
+* OnlineSecurity: whether the customer has online security or not (Yes, No, No internet service)
+* OnlineBackup: whether the customer has online backup or not (Yes, No, No internet service)
+* DeviceProtection: whether the customer has device protection or not (Yes, No, No internet service)
+* TechSupport: whether the customer has tech support or not (Yes, No, No internet service)
+* StreamingTV: whether the customer has streaming TV or not (Yes, No, No internet service)
+* StreamingMovies: whether the customer has streaming movies or not (Yes, No, No internet service)
+* Contract: the contract term of the customer (Month-to-month, One year, Two year)
+* PaperlessBilling: whether the customer has paperless billing or not (Yes, No)
+* PaymentMethod: the customers payment method - Electronic check, Mailed check, Bank transfer (automatic), Credit card (automatic)
+* MonthlyCharges: the amount charged to the customer monthly (numeric)
+* TotalCharges: the total amount charged to the customer (numeric)
+* Churn: whether the customer churned or not (Yes or No) - our target variable!
+
+```{r warning = FALSE, message = FALSE}
+sapply(churn, function(x) sum(is.na(x)))
+```
+
+The dataset has `r sum(is.na(churn))` missing values, all of them under TotalCharges. An error might have occurred in the collection process, which prevented us from getting them correctly. 
+But we have MonthlyCharges, which might be enough for the purpose of this exercise. In fact, if these two variables are highly correlated we can only use one of them to avoid multicollinearity.
+```{r warning = FALSE, message = FALSE, fig.height=5, fig.width=5}
+library(corrplot)
+complete <- churn[complete.cases(churn), ]
+charges <- complete[,19:20]
+corr.matrix <- cor(charges)
+corrplot(corr.matrix, main="\nCorrelation Plot for Total & Monthly Charges", method="number")
+```
+
+As Monthly and Total Charges are correlated and we lack data for Total Charges, instead of getting rid of the rows with missing values, I will leave Total Charges out of the equation.
+
+Regarding the tenure variable, it ranges from `r min(churn$tenure)` to `r max(churn$tenure)`months. So, we can group them into five tenure groups:
+```{r warning = FALSE, message = FALSE}
+group_tenure <- function(tenure){
+  if (tenure >= 0 & tenure <= 12){
+    return('0-12 Month')
+  }else if(tenure > 12 & tenure <= 24){
+    return('12-24 Month')
+  }else if (tenure > 24 & tenure <= 48){
+    return('24-48 Month')
+  }else if (tenure > 48 & tenure <=60){
+    return('48-60 Month')
+  }else if (tenure > 60){
+    return('> 60 Month')
+  }
+}
+churn$tenure_group <- sapply(churn$tenure,group_tenure)
+churn$tenure_group <- as.factor(churn$tenure_group)
+```
+
+SeniorCitizen is a binary feature. Let's change it in order to follow the same format as the remaining variables.
+```{r warning = FALSE, message = FALSE}
+churn$SeniorCitizen <- as.factor(ifelse(churn$SeniorCitizen==1,"Yes","No"))
+```
+
+Interestingly, there are a few attributes which should also have a "Yes/No" output but have different ways of providing the negative answer. Therefore, we need to change "No internet service"" to "No"" for six columns: "OnlineSecurity"", "OnlineBackup", "DeviceProtection", "TechSupport", "StreamingTV", "StreamingMovies".
+```{r warning = FALSE, message = FALSE}
+library(plyr)
+for(i in 1:ncol(churn[,10:15])) {
+  churn[,10:15][,i] <- as.factor(mapvalues
+                                        (churn[,10:15][,i], from =c("No internet service"),to=c("No")))
+}
+```
+
+This situation happens for for MultipleLines too, so let's take the same approach.
+```{r warning = FALSE, message = FALSE}
+churn$MultipleLines <- as.factor(mapvalues(churn$MultipleLines, 
+                                           from=c("No phone service"),
+                                           to=c("No")))
+```
+
+Before moving on to some exploratory analysis, we can ditch unnecessary variables which will add nothing to our predicting models. 
+```{r warning = FALSE, message = FALSE}
+library(dplyr)
+churn <- churn %>% select(-customerID, -tenure, -TotalCharges)
+```
+
+Below we can see how our categorical variables behave depending on churn outcomes. 
+```{r warning = FALSE, message = FALSE, fig.align = "center", echo=F}
+library(ggplot2)
+library(gridExtra)
+g1 <- ggplot(churn, aes(x=gender, fill=Churn)) + ggtitle("Gender") + xlab("Gender") +
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+g2 <- ggplot(churn, aes(x=SeniorCitizen, fill=Churn)) + ggtitle("Senior Citizen") + xlab("Senior Citizen") + 
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+g3 <- ggplot(churn, aes(x=Partner, fill=Churn)) + ggtitle("Partner") + xlab("Partner") + 
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+g4 <- ggplot(churn, aes(x=Dependents, fill=Churn)) + ggtitle("Dependents") + xlab("Dependents") +
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+grid.arrange(g1, g2, g3, g4, ncol=2)
+
+g5 <- ggplot(churn, aes(x=PhoneService, fill=Churn)) + ggtitle("Phone Service") + xlab("Phone Service") +
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+g6 <- ggplot(churn, aes(x=MultipleLines, fill=Churn)) + ggtitle("Multiple Lines") + xlab("Multiple Lines") + 
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+g7 <- ggplot(churn, aes(x=InternetService, fill=Churn)) + ggtitle("Internet Service") + xlab("Internet Service") + 
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+g8 <- ggplot(churn, aes(x=OnlineSecurity, fill=Churn)) + ggtitle("Online Security") + xlab("Online Security") +
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+grid.arrange(g5, g6, g7, g8, ncol=2)
+
+g9 <- ggplot(churn, aes(x=OnlineBackup, fill=Churn)) + ggtitle("Online Backup") + xlab("Online Backup") +
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+g10 <- ggplot(churn, aes(x=DeviceProtection, fill=Churn)) + ggtitle("Device Protection") + xlab("Device Protection") + 
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+g11 <- ggplot(churn, aes(x=TechSupport, fill=Churn)) + ggtitle("Tech Support") + xlab("Tech Support") + 
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+g12 <- ggplot(churn, aes(x=StreamingTV, fill=Churn)) + ggtitle("Streaming TV") + xlab("Streaming TV") +
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+grid.arrange(g9, g10, g11, g12, ncol=2)
+
+g13 <- ggplot(churn, aes(x=StreamingMovies, fill=Churn)) + ggtitle("Streaming Movies") + xlab("Streaming Movies") +
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+g14 <- ggplot(churn, aes(x=Contract, fill=Churn)) + ggtitle("Contract") + xlab("Contract") + 
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+g15 <- ggplot(churn, aes(x=PaperlessBilling, fill=Churn)) + ggtitle("Paperless Billing") + xlab("Paperless Billing") + 
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+g16 <- ggplot(churn, aes(x=PaymentMethod, fill=Churn)) + ggtitle("Payment Method") + xlab("Payment Method") +
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+g17 <- ggplot(churn, aes(x=tenure_group, fill=Churn)) + ggtitle("Tenure Group") + xlab("Tenure Group") +
+  geom_bar(aes(y = 100*(..count..)/sum(..count..)), width = 0.5) + ylab("Percentage") + coord_flip() + scale_fill_manual(values = c("dodgerblue4","firebrick3")) + theme_minimal()
+grid.arrange(g13, g14, g15, g16, g17, ncol=2)
+```
+
+From the graphs above, we can easily see that, for example, gender doesn't add much value to our prediction. Conversely, Month-to-Month contracts tend to churn more often than one or two year. Also, paperless billing customers are more likely to cancel their subscriptions. 
+How do MonthlyCharges relate to churn?
+
+```{r warning = FALSE, message = FALSE, echo=F, fig.align = "center", fig.height=3, fig.width=4}
+ggplot(churn, aes(x=as.factor(Churn), y=MonthlyCharges)) + 
+  geom_boxplot(fill=c("dodgerblue4","firebrick3")) + 
+  xlab("Churn") + ggtitle("Monthly Charges distribution by Churn outcome") + theme_bw()
+```
+
+It seems we face a few churn risks for clients who have higher MonthlyCharges.
+
+But let's further analyse churn prediction using Logistic Regression.
+
+```{r warning = FALSE, message = FALSE}
+library(caret)
+intrain<- createDataPartition(churn$Churn,p=0.7,list=FALSE)
+set.seed(2019)
+training<- churn[intrain,]
+testing<- churn[-intrain,]
+LogModel <- glm(Churn ~ .,family=binomial(link="logit"),data=training)
+print(summary(LogModel))
+```
+
+According to the Logistic Regression summary above, the top three most-relevant features include Contract, tenure_group and PaperlessBilling.
+
+```{r warning = FALSE, message = FALSE}
+anova(LogModel, test="Chisq")
+```
+
+Analyzing the deviance table we can see the drop in deviance when adding each variable one at a time. Adding InternetService, Contract, OnlineSecurity and tenure_group significantly reduces the residual deviance. 
+Assessing the predictive ability of our model...
+
+```{r warning = FALSE, message = FALSE}
+testing$Churn <- as.character(testing$Churn)
+testing$Churn[testing$Churn=="No"] <- "0"
+testing$Churn[testing$Churn=="Yes"] <- "1"
+fitted.results <- predict(LogModel,newdata=testing,type='response')
+fitted.results <- ifelse(fitted.results > 0.5,1,0)
+misClasificError <- mean(fitted.results != testing$Churn)
+print(paste('Logistic Regression Accuracy',1-misClasificError))
+```
+
+Although accuracy is good, I believe we can do as good as this but playing with less predictors. I will use the stepwise method to reduce the number of variables at stake.
+```{r warning = FALSE, message = FALSE}
+LogModel2 <- step(LogModel)
+print(summary(LogModel2))
+anova(LogModel2, test="Chisq")
+fitted.results2 <- predict(LogModel2,newdata=testing,type='response')
+fitted.results2 <- ifelse(fitted.results2 > 0.5,1,0)
+misClasificError2 <- mean(fitted.results2 != testing$Churn)
+print(paste('Logistic Regression Accuracy',1-misClasificError2))
+```
+
+We managed to keep accuracy high at `r print(1-misClasificError2)`, using less predictors. Now let's see how Decision Trees would predict using only these three features.
+```{r warning = FALSE, message = FALSE, fig.align = "center", fig.height=7, fig.width=12}
+library(party)
+tree <- ctree(Churn~Contract+tenure_group+InternetService, training)
+plot(tree)
+```
+
+* Out of three variables, Contract is the most important to predict customer churn;
+* If a customer in a one-year or two-year contract, he/she is less likely to churn;
+* If a customer is in a month-to-month contract, with Fibre Optic Internet Service and in the tenure group of 0???12 month, then this customer is more likely to churn.
+
+```{r warning = FALSE, message = FALSE}
+pred_tree <- predict(tree, testing)
+print("Confusion Matrix for Decision Tree"); table(Predicted = pred_tree, Actual = testing$Churn)
+p1 <- predict(tree, training)
+tab1 <- table(Predicted = p1, Actual = training$Churn)
+tab2 <- table(Predicted = pred_tree, Actual = testing$Churn)
+print(paste('Decision Tree Accuracy',sum(diag(tab2))/sum(tab2)))
+```
+
+Accuracy slightly dropped when compared to Logistic Regression. But we were using only three predictors. Let's see how better we can do by using Random Forest.
+
+```{r warning = FALSE, message = FALSE}
+library(randomForest)
+rfModel <- randomForest(Churn ~., data = training)
+print(rfModel)
+```
+
+The error rate seems to be higher when predicting "Yes". We can also see it in the confusion matrix below:
+```{r warning = FALSE, message = FALSE}
+pred_rf <- predict(rfModel, testing)
+testing$Churn2 <- as.factor(ifelse(testing$Churn=="1","Yes","No"))
+caret::confusionMatrix(pred_rf, testing$Churn2)
+```
+
+We can use the following plot to determine the number of trees. 
+```{r warning = FALSE, message = FALSE, fig.align="center"}
+plot(rfModel)
+```
+
+As the number of trees increases, the error rate decreases, and then becomes almost constant. We are not able to decrease the error rate after about 100 to 200 trees. Now let's tune our model...
+
+```{r warning = FALSE, message = FALSE, fig.align="center"}
+t <- tuneRF(training[, -18], training[, 18], stepFactor = 0.5, plot = TRUE, ntreeTry = 200, trace = TRUE, improve = 0.05)
+```
+
+In order to increase our accuracy, the graphs suggest we need to use ntrees = 200 and 2 predictors for splitting at each node (mtry)
+
+```{r warning = FALSE, message = FALSE}
+rfModel_new <- randomForest(Churn ~., data = training, ntree = 200, mtry = 2, importance = TRUE, proximity = TRUE)
+print(rfModel_new)
+```
+
+Error rate decreased from 21.05% to 20.5%.
+
+```{r warning = FALSE, message = FALSE}
+pred_rf_new <- predict(rfModel_new, testing)
+caret::confusionMatrix(pred_rf_new, testing$Churn2)
+```
+
+Accuracy increased to 79.8% and Sensitivity imrpoved to 90%.
+According to Random Forest, the most important features are the following:
+```{r warning = FALSE, message = FALSE, fig.align="center"}
+varImpPlot(rfModel_new, sort=T, n.var = 10, main = 'Top 10 Feature Importance')
+```
+
+So, we can see that we can use Logistic Regression, Decision Trees and Random Forest for customer churn analysis for this particular dataset equally fine. 
+From the three methods, we can conclude that tenure_group, Contract, PaperlessBilling, MonthlyCharges and InternetService appear to play a major role in customer churn. 
