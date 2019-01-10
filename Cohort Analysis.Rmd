@@ -1,0 +1,212 @@
+---
+title: "Cohort Analysis"
+author: "Jorge Ferreira"
+output:
+  html_document: default
+---
+
+Let's start off by reading in the data to see its content
+
+```{R warning = FALSE, message = FALSE, fig.align="center"}
+library(readxl)
+online.retail <- read_xlsx("~/Desktop/Online Retail.xlsx")
+online.retail <- data.frame(online.retail)
+
+library(DT)
+DT::datatable(head(online.retail,30),
+              rownames = FALSE,
+              options = list(
+                pageLength = 10,
+                lengthMenu = c(10, 20, 30)),
+              caption = htmltools::tags$caption(
+                style = 'caption-side:bottom; text-align: right;',
+                'Source:', htmltools::em('UCI Machine Learning Repository')))
+```
+
+The dataset provides us with purchases from `r min(online.retail$InvoiceDate)` to `r max(online.retail$InvoiceDate)` across `r length(unique(online.retail$Country))` countries.
+
+Do we have duplicated data? If yes, we need to drop them.
+```{R warning = FALSE, message = FALSE}
+nrow(online.retail[duplicated(online.retail),])
+online.retail2 <- unique(online.retail)
+```
+
+What about missing values?
+```{R warning = FALSE, message = FALSE}
+sapply(online.retail2, function(x) sum(is.na(x)))
+```
+
+The variables which have missing values are Description and CustomerID. We might have experienced an error in the data collection process. For now, we can get rid of these rows
+```{R warning = FALSE, message = FALSE}
+online.retail3 <- online.retail2[complete.cases(online.retail2),]
+```
+
+We ended up getting a dataset with `r nrow(online.retail3)`.
+I want to focus on 2011, so will set up a column with the year to continue with our analysis.
+```{R warning = FALSE, message = FALSE}
+online.retail3$InvoiceDate <- as.Date(online.retail3$InvoiceDate, format = "%m/%d/%Y")
+online.retail3$Year <- as.numeric(format(online.retail3$InvoiceDate, '%Y'))
+cohorts2011 <- online.retail3[online.retail3$Year==2011,]
+```
+
+Now that I have data for 2011 only, will also get rid of unnecessary columns for the purpose of our cohort analysis.
+```{R warning = FALSE, message = FALSE}
+cohorts2011 <- cohorts2011[,c("CustomerID","InvoiceDate","Year")]
+```
+
+Will need to create a variable to get the date each customer joined or, in this case, made his/her first purchase.
+```{R warning = FALSE, message = FALSE}
+join.date <- aggregate(InvoiceDate~CustomerID,cohorts2011,min, na.rm = TRUE)
+colnames(join.date)[2] <- "Join_Date"
+```
+
+In fact, this variable is the one which allows us to create our cohorts. "A cohort is a group of people who have a common characteristic during a period of time. In this case, its the date a customer became a customer". Clients could be grouped weekly, monthly, quarterly, yearly, but I will group clients on a monthly basis - it all depends on the nature of the business cycle.
+```{R warning = FALSE, message = FALSE}
+cohorts2011 <- merge(cohorts2011, join.date, by.x = "CustomerID",by.y = "CustomerID", all.x = TRUE)
+cohorts2011$Cohort <- as.numeric(format(cohorts2011$Join_Date, "%m"))
+```
+
+Another variable we need to create for cohorts is the time clients have been with us at each purchase they make. I will call it Age and is calculated by the different between InvoiceDate and Join Date. Firstly will do it in days (due to function limitations) and then translate it to months.
+```{R warning = FALSE, message = FALSE}
+cohorts2011$Age_by_Day <- as.numeric(difftime(cohorts2011$InvoiceDate,cohorts2011$Join_Date,units = c("days")))
+cohorts2011$Age_by_Month <- floor(cohorts2011$Age_by_Day/30)
+```
+
+Let's relable our cohorts for something more intuitive.
+```{R warning = FALSE, message = FALSE}
+groups <- c("Jan Cohorts",
+            "Feb Cohorts",
+            "Mar Cohorts",
+            "Apr Cohorts",
+            "May Cohorts",
+            "Jun Cohorts",
+            "Jul Cohorts",
+            "Aug Cohorts",
+            "Sep Cohorts",
+            "Oct Cohorts",
+            "Nov Cohorts",
+            "Dec Cohorts")
+
+for(i in 1:12){
+  cohorts2011[cohorts2011$Cohort==i,"Cohort"] <- groups[i]
+}
+
+rm(i,groups)
+
+cohorts2011$Cohort <- factor(cohorts2011$Cohort,ordered = T,levels =c("Jan Cohorts",
+                                                                      "Feb Cohorts",
+                                                                      "Mar Cohorts",
+                                                                      "Apr Cohorts",
+                                                                      "May Cohorts",
+                                                                      "Jun Cohorts",
+                                                                      "Jul Cohorts",
+                                                                      "Aug Cohorts",
+                                                                      "Sep Cohorts",
+                                                                      "Oct Cohorts",
+                                                                      "Nov Cohorts",
+                                                                      "Dec Cohorts"))
+```
+
+It's important that we remove the day element of our dates, so that we can remove extra observations in the months where customers made multiple purchases.
+```{R warning = FALSE, message = FALSE}
+cohorts2011$Join_Date <- format(cohorts2011$Join_Date, "%Y-%m")
+cohorts2011$InvoiceDate <- format(cohorts2011$InvoiceDate, "%Y-%m")
+```
+
+Still need to remove the extra monthly observations to avoid counting unique customer IDs multiple times in any single month. To do that, we have to exclude columns Age_by_Day and Age_by_Month so we can spot duplicates.
+```{R warning = FALSE, message = FALSE}
+dupes <- which(duplicated(cohorts2011[,c(-6,-7)]))
+cohorts2011 <- cohorts2011[-dupes,]
+```
+
+Now let's create the table which will allow us to draw the cohort chart. Will create rows for each cohort group and columns for each value in the Age_by_Month variable.
+```{R warning = FALSE, message = FALSE}
+library(reshape2)
+cohorts.wide <- dcast(cohorts2011,Cohort~Age_by_Month,
+                                value.var="CustomerID",
+                                fun.aggregate = length)
+```
+
+To better visualize this, will create 20 rgb color values ranging from blue to white and exhibit the table.
+```{R warning = FALSE, message = FALSE, fig.align="center"}
+breaks <- quantile(cohorts.wide[,3:13], probs = seq(.05, .95, .05), na.rm = TRUE)
+colors <- sapply(round(seq(155, 80, length.out = length(breaks) + 1), 0),
+                 function(x){ rgb(x,x,155, maxColorValue = 155) } )
+DT::datatable(cohorts.wide,
+              class = 'cell-border stripe',
+              rownames = FALSE,
+              options = list(
+                ordering=F,
+                dom = 't',
+                pageLength = 12) ) %>%
+  formatStyle("0",
+              backgroundColor = 'lightgrey',
+              fontWeight = 'bold') %>%
+  formatStyle(names(cohorts.wide[c(-1,-2)]),fontWeight = 'bold',color = 'white', backgroundColor = styleInterval(breaks,colors))
+```
+
+The table above represents retained customers. Column 0 gives us the count of acquired customers for each month. Column 5, for example, will provide us info on the number of customers who came back to our site and made a purchase 5 months after having joined us. 
+
+But would be great to have these values as percentages...
+```{R warning = FALSE, message = FALSE, fig.align="center"}
+cw.retention <- cohorts.wide
+
+for (i in rev(3:ncol(cw.retention))){
+  cw.retention[,i] <- round(cw.retention[,i]/cw.retention[,2],4)
+}
+
+retention.avgs <- cw.retention
+retention.avgs[retention.avgs == 0.0000] <- NA
+avgs.ret <- round(apply(retention.avgs[,-1],2,mean, na.rm=TRUE),4)
+avgs.ret <- c(0,avgs.ret)
+
+cw.retention <- rbind(cw.retention,avgs.ret)
+
+breaks <- quantile(cw.retention[,3:13], probs = seq(.05, .95, .05), na.rm = TRUE)
+colors <- sapply(round(seq(155, 80, length.out = length(breaks) + 1), 0),
+                 function(x){ rgb(x,x,155, maxColorValue = 155) } )
+
+DT::datatable(cw.retention,
+              class = 'cell-border stripe',
+              rownames = FALSE,
+              options = list(
+                ordering=F,
+                dom = 't',
+                pageLength = 13) ) %>%
+  formatStyle("0",
+              backgroundColor = 'lightgrey',
+              fontWeight = 'bold') %>%
+  formatPercentage(c(3:13),2) %>% # We don't want column 0 in %
+  formatStyle("1", fontWeight = 'bold') %>%
+  formatStyle(names(cw.retention[c(-1,-2)]),color = 'white',fontWeight = 'bold', backgroundColor = styleInterval(breaks,colors))
+```
+
+The January cohort features significantly higher retention rates than the other cohorts.
+The horizontal panel below the retention rate mixpanel features the average retention rate for each monthly age of all cohorts. The average count of acquired customers per month is 397. Overall, the average retention rate increases as the cohort age increases, meaning customers are coming back each month to purchase more goods from us.
+
+We can also show our analysis in a "layer cake" chart for a more visual interpretation.
+```{R warning = FALSE, message = FALSE, fig.align="center"}
+library(ggplot2)
+cohort.sum <- data.frame(cohort=c('Cohort01', 'Cohort02', 'Cohort03', 'Cohort04', 'Cohort05', 'Cohort06', 'Cohort07', 'Cohort08', 'Cohort09', 'Cohort10', 'Cohort11', 'Cohort12'),
+                         M1=c(916,0,0,0,0,0,0,0,0,0,0,0),
+                         M2=c(311,560,0,0,0,0,0,0,0,0,0,0),
+                         M3=c(352,144,583,0,0,0,0,0,0,0,0,0),
+                         M4=c(337,139,112,387,0,0,0,0,0,0,0,0),
+                         M5=c(320,174,145,110,351,0,0,0,0,0,0,0),
+                         M6=c(316,124,127,66,62,292,0,0,0,0,0,0),
+                         M7=c(311,148,108,85,51,45,249,0,0,0,0,0),
+                         M8=c(317,153,111,74,67,51,38,204,0,0,0,0),
+                         M9=c(343,165,139,92,75,63,48,43,362,0,0,0),
+                         M10=c(358,165,155,92,71,78,53,59,95,419,0,0),
+                         M11=c(415,170,135,99,95,75,59,42,85,89,394,0),
+                         M12=c(84,28,27,15,7,9,4,5,7,9,12,47))
+
+cohort.chart <- melt(cohort.sum, id.vars = "cohort")
+colnames(cohort.chart) <- c('cohort', 'month', 'ActiveUsers')
+
+blues <- colorRampPalette(c('lightblue', 'darkblue'))
+
+ggplot(cohort.chart, aes(x=month, y=ActiveUsers , group=cohort)) + geom_area(aes(fill = cohort)) +
+  scale_fill_manual(values = blues(nrow(cohort.sum))) +
+  ggtitle('Total Users by Cohort')
+```
