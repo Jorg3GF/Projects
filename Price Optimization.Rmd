@@ -1,0 +1,172 @@
+---
+title: "Price Optimization"
+author: "Jorge Ferreira"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+
+I was provided with a dataset from a large classifieds website, with data on demand and revenue across different categories. 
+The company offers a promotional feature X, at a fee of $5, allowing ads to get more attention.  
+My job is to better understand ads dynamics and come up with a more effective monetization strategy.
+
+Let's start by reading in the dataset.
+```{r warning = FALSE, message = FALSE, echo=FALSE}
+library(readxl)
+data <- read_xlsx("~/Desktop/R Github/OLX_Challenge_files/olx_pricing.xlsx")
+```
+
+Below we can see the first 30 rows.
+```{r warning = FALSE, message = FALSE, echo=F}
+library(DT)
+DT::datatable(head(data,30),
+              rownames = FALSE,
+              options = list(
+                pageLength = 10,
+                lengthMenu = c(10, 20, 30)))
+```
+
+After seeing similar categories in separate rows, I feel tempted to pre-process data and merge all rows which belong to the same category. But for the purpose of this excercise will let them uncleaned in order to keep granularity. 
+
+```{r warning = FALSE, message = FALSE}
+summary(data)
+```
+
+In 2012, the number of our Listed ads range from 4312 (stitches) to almost 10 million (Women's fashion). The most expensive items were digital cameras at an average price of $178 and the cheapest ones were accessories at $6. The top category in revenue from feature X is Women's fashion and the lowest one is HD DVD. The total revenue from feature X, in 2012, was roughly 9 million dollars.
+
+```{r warning = FALSE, message = FALSE, fig.align="center"}
+par(mfrow=c(1,2),oma = c(0, 0, 2, 0))
+par(mar=c(4,2,2,2))
+hist(data$`Average asking price of ads`,  main="" , breaks=30 , col=rgb(0.3,0.5,1,0.4) , xlab="Price Distribution" , ylab="Correlation with Revenue")
+plot(data$`Average asking price of ads` , data$`Revenue promotion feature X`,  main="" , pch=20 , cex=0.4 , col=rgb(0.3,0.5,1,0.4)  , xlab="Correlation with Revenue" , ylab="Correlation with Revenue")
+mtext("Price Distribution and correlation with Revenue", outer = TRUE, cex = 1.5, font=3, col=rgb(0.1,0.3,0.5,0.5) )
+```
+
+Categories recording the highest demand have average prices below 50 dollars. The mean of prices is 53 dollars and median is 37 dollars, suggesting the right skewed distribution seen above. 
+Revenue from promotion feature X and average price don't seem to correlate whatsoever (corr=0.37).
+
+```{r warning = FALSE, message = FALSE, fig.align="center", fig.height=4, fig.width=9}
+library(ggplot2)
+library(gridExtra)
+
+g1 <- ggplot(data,aes(x=`Listed ads`,y=`Average asking price of ads`)) + geom_point(color="#99FF99") + ggtitle("Ads vs Avg Price") + xlab("Ads") + ylab("Average Price")
+g2 <- ggplot(data,aes(x=`Listed ads`,y=`Revenue promotion feature X`)) + geom_point(color="#99FF99") + ggtitle("Ads vs Revenue Feature X") + xlab("Ads") + ylab("Revenue Feature X")
+grid.arrange(g1, g2, ncol=2)
+```
+
+It looks like the number of listed ads have a negative correlation with their average price.
+
+We can derive some further information from the columns provided in order to go deeper in our analysis. I want to get another two variables:   
+1. The share of ads which use promotion feature X in each category;   
+2. The price weight of feature X within the average price of ads.   
+
+```{r warning = FALSE, message = FALSE}
+data$Ads_with_featureX <- data$`Revenue promotion feature X`/5 
+data$Share_of_ads_with_featureX <- data$Ads_with_featureX/data$`Listed ads`
+data$FeatureX_price_weight <- 5/data$`Average asking price of ads`
+summary(data[,6:7])
+```
+
+The share of ads with promotion feature X range from 0.1% to 3%, whereas the price weight of feature X over total price of goods range from 2.8% to 80%.
+
+```{r warning = FALSE, message = FALSE, fig.align="center"}
+ggplot(data, aes(x=data$Share_of_ads_with_featureX, y=data$FeatureX_price_weight)) + geom_point(color="#99FF99") +  geom_smooth(method=loess , color="dodgerblue4", se=TRUE) + coord_cartesian(ylim = c(0, 1)) + xlab("Share of ads with feature X") + ylab("Price Weigth of Feature X") + ggtitle("Correlation between price weight and share of ads")
+```
+
+There is a strong negative correlation between the price weight and share of ads with feature X, at -0.75. The cheaper the goods we advertise, the less chances we have that people are willing to pay $5 to promote them.   
+Considering that the most popular categories have low prices, we do need to come up with a different strategy to take the most out of feature X.  
+
+I propose setting up a variable cost for feature X, instead of the fixed $5 - users would pay a percentage of the price of the goods advertised. This way, we could probably stretch feature X prices for expensive items and get a modest fee out of cheap ones.  
+
+Through regression, we can come up with the demand equation for feature X.
+```{r warning = FALSE, message = FALSE}
+regression <- lm(data$Share_of_ads_with_featureX~data$FeatureX_price_weight)
+summary(regression)
+```
+
+However, this wouldn't be very accurate as the relation we saw above is not linear. We can transform price weight by applying log() to make it better!
+
+```{r warning = FALSE, message = FALSE}
+fit <- lm(data$Share_of_ads_with_featureX~log(data$FeatureX_price_weight))
+summary(fit)
+```
+
+\begin{equation}
+D(P) = -0.0056-0.0071*log(P)
+\end{equation}
+
+Hence, we get the revenue equation too:
+
+\begin{equation}
+R(P) = D * P
+\end{equation}
+
+\begin{equation}
+R(P) = (-0.0056-0.0071*log(P))*P
+\end{equation}
+
+If we derive R(P) and equal to 0, we will get the price at which revenue is maximized.
+```{r warning = FALSE, message = FALSE}
+R <- expression((-0.0056-0.0071*log(P))*P)
+D(R, "P")
+```
+
+\begin{equation}
+R'(P) = (-0.0056 - 0.0071 * log(P)) - 0.0071 * (1/P) * P 
+\end{equation}
+
+\begin{equation}
+R'(P) = 0 
+\end{equation}
+
+\begin{equation}
+(-0.0056 - 0.0071 * log(P)) - 0.0071 * (1/P) * P = 0
+\end{equation}
+
+```{r warning = FALSE, message = FALSE}
+f <- function(P) (-0.0056 - 0.0071 * log(P)) - 0.0071 * (1/P) * P 
+uniroot(f, interval=c(0.001, 1))[1]
+```
+
+\begin{equation}
+P = 0.167
+\end{equation}
+
+Therefore, if we set feature X price at 17% of ads' average price, we will get a higher revenue. 
+
+```{r warning = FALSE, message = FALSE}
+data$featureX_new_price <- 0.17*data$`Average asking price of ads`
+data$expected_demand_featureX <- (-0.0056-0.0071*log(0.17))*data$`Listed ads`
+data$expected_revenue_featureX <- data$featureX_new_price*data$expected_demand_featureX
+```
+
+As a matter of fact, we expect to see a decline of feature X demand by roughly -10%.
+```{r warning = FALSE, message = FALSE}
+sum(data$Ads_with_featureX)
+sum(data$expected_demand_featureX)
+sum(data$expected_demand_featureX)/sum(data$Ads_with_featureX)-1
+```
+
+But in the end, revenue is likely to skyrocket by 43% to 12 million dollars. 
+```{r warning = FALSE, message = FALSE}
+sum(data$expected_revenue_featureX)
+sum(data$`Revenue promotion feature X`)
+sum(data$expected_revenue_featureX)/sum(data$`Revenue promotion feature X`)-1
+```
+
+<style>
+div.green { background-color:#99FF99; border-radius: 5px; padding: 20px;}
+</style>
+<div class = "green">
+
+I propose a monetization strategy based on variable prices for feature X. Overall demand for feature X is likely to **shrink by -10% to 1.6 million units**, but we will be able to stretch users' willingness to pay a higher price for it. We are expected to be better off, revenue wise, as it would **skyrocket by 43% to 12 million dollars**.
+
+Anyways, even though this seems to be a good strategy, we will need to track progress and perform A/B tests in order to understand if theory is verified in real life, in this particular context.  
+
+As a matter of fact, there are plenty of external factors and other variables which are not being considered which might affect our results. The specificity of products, the number of substitutes available, the competitive landscape, all these variables will affect demand. Further data needs to be analyzed so we can tweak our model to make it more accurate.
+
+But for now, I would recommend testing this strategy of **setting feature X price at 17% of ads' average price**. 
+
+</div>
