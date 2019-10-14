@@ -1,0 +1,174 @@
+---
+title: "Fantasy Premier League"
+author: "Jorge Ferreira"
+output:
+  html_document: default
+---
+
+Let's read in the dataset, updated with the latest information from game week (GW) 8 of season 2019-20.
+```{R warning = FALSE, message = FALSE}
+fpl <- read.csv("https://raw.githubusercontent.com/Jorg3GF/projects/master/gw8.csv")
+dim(fpl)
+```
+
+We have 79 variables for 551 players. There are some interesting player attributes here. But I want to make some tweaks. I'd like to have players' names in a single variable. 
+
+Also, I'm used to see their cost in millions, so need to divide by one milion. 
+
+More importantly, I want to create a new feature. Because we only have 100M pounds of budget, we won't be able to create a team of "stars" only (all those who score many points each match). 
+
+Therefore, another metric to take into consideration is the number of points a given player provides for each penny invested. We call it ROI (Return on Investment) and it goes like this:
+
+\begin{equation}
+ROI = Total Points / Cost
+\end{equation}
+
+```{R warning = FALSE, message = FALSE}
+fpl$Player <- paste(fpl$FirstName,fpl$Surname)
+fpl$Cost <- fpl$Cost/1000000
+fpl$ROI <- fpl$TotalPoints/fpl$Cost
+```
+
+Alternatively, we can also see Total Points vs Cost dynamics through the following scatter plot:
+
+```{R warning = FALSE, message = FALSE, echo = FALSE, fig.align = "center"}
+library(ggplot2)
+ggplot(fpl, aes(x=TotalPoints, y=Cost, color=PositionsList)) + 
+  geom_point(size=1.2) + theme_minimal() + labs(color = "Position")
+```
+
+As a matter of fact, we are lucky enough to see that the correlation between cost and total points is not as strong as I thought. 
+
+```{R warning = FALSE, message = FALSE, echo = FALSE}
+library(dplyr)
+library(corrplot)
+#For some reason, clean sheets are wrong for Forwards. They shouldn't get those points... so I need to amend this issue
+fpl$CleanSheets <- ifelse(fpl$PositionsList=="FWD", fpl$CleanSheets==0, fpl$CleanSheets)
+fplcor <- fpl %>% select(Cost, TotalPoints, GoalsScored, CleanSheets, Assists, MinutesPlayed)
+corr.matrix <- cor(fplcor)
+corrplot(corr.matrix, method="number")
+```
+
+As proved above, it is moderately correlated. In fact, I was also expecting goals scored and assists to record a stronger correlation with total points. It seems the most important thing is to play as much as you can - this one I saw it coming!
+This is what allows us to build up a very strong team with only 100M pounds of budget.
+
+Now, the question is: which sectors should we invest our money in? And what should be the balance between the most expensive players and more affordable ones at each sector of the pitch? Our budget doesn't allow us to get more than 2 or 3 "stars", as we still need to get a total of 15 solid players. So, we need to dive deeper in our dataset to find them out.
+
+I'm curious about the distribution of key metrics across different positions (I'm considering the top 20 players at each position only).
+
+```{R warning = FALSE, message = FALSE, echo=FALSE, fig.align = "center", fig.width=9}
+f <- fpl[,c(3:8,18,19,31,33,34,40,45:81)]
+f2 <- f %>% select(Player,PositionsList,Team,TotalPoints,Cost,ROI,AveragePoints,GoalsScored,Assists,CleanSheets,MinutesPlayed,SelectedByPercent)
+names(f2)[2] <- "Position"
+f20 <- f2 %>% group_by(Position) %>% arrange(Position, desc(TotalPoints)) %>% top_n(n=20,wt=TotalPoints)
+library(gridExtra)
+b1 <- ggplot(f20, aes(x=Position, y=TotalPoints)) + 
+  geom_boxplot(fill="#1B458F") + ylab("Total Points") +
+  xlab("Position") + ggtitle("Distribution of Total Points") + theme(axis.title.x=element_blank()) + theme_minimal()
+b2 <- ggplot(f20, aes(x=Position, y=Cost)) + 
+  geom_boxplot(fill="#A7A5A6") + ylab("Cost") +
+  xlab("Position") + ggtitle("Distribution of Cost") + theme(axis.title.x=element_blank()) + theme_minimal()
+b3 <- ggplot(f20, aes(x=Position, y=ROI)) + 
+  geom_boxplot(fill="#C4122E") + ylab("ROI") +
+  xlab("Position") + ggtitle("Distribution of ROI") + theme(axis.title.x=element_blank()) + theme_minimal()
+grid.arrange(b1, b2, b3, ncol = 3)
+```
+
+On average, Goalkeepers (GLK) tipically sum up less points than other positions, as they can only collect them from three main sources: minutes played, clean sheets and saves. In the beginning of this season I picked up a very good one (Ederson) and one of the cheapest to the bench. 
+
+The reasons why I selected Ederson were due to the fact that he plays every single match, his team (Man City) was the team with the highest number of clean sheets and we all know he's magnificent - so, plenty of beautiful saves ahead.
+
+Turns out that now I am planning to shift my strategy. I want to save some money in this sector to allocate it to both the midfield and the attack. Moreover, these first 8 GWs have shown some different dynamics than last season. 
+
+My mates claim that this season we won't see as many clean sheets as in 2018-19. How are clean sheets going for the top teams in this category?
+
+```{R warning = FALSE, message = FALSE, echo = FALSE, fig.align = "center"}
+cs <- f2 %>% filter(Position=='GLK') %>% group_by(Team) %>% summarise(Clean_Sheets=max(CleanSheets)) %>% arrange(desc(Clean_Sheets))
+tp <- f2 %>% group_by(Team) %>% summarise(Points=sum(TotalPoints))
+library(dplyr)
+both <- inner_join(cs, tp, by = "Team")
+both$Points_Rank <- ifelse(both$Points>=350,"High",ifelse(both$Points>=300 & both$Points<350,"Medium","Low"))
+library(ggpubr)
+ggdotchart(both, x = "Team", y = "Clean_Sheets",
+           color = "Points_Rank",                                # Color by groups
+           palette = c("#00AFBB", "#E7B800", "#FC4E07"), # Custom color palette
+           sorting = "descending",                       # Sort value in descending order
+           add = "segments",                             # Add segments from y = 0 to dots
+           add.params = list(color = "lightgray", size = 2), # Change segment color and size
+           dot.size = 6,                                 # Large dot size
+           label = round(both$Clean_Sheets,1),                        # Add mpg values as dot labels
+           font.label = list(color = "white", size = 9, 
+                             vjust = 0.5),               # Adjust label parameters
+           ggtheme = theme_pubr()                        # ggplot2 theme
+)+ geom_hline(yintercept = 0, linetype = 2, color = "lightgray")+ labs(color="Points Rank", y="Clean Sheets")
+```
+
+Last season, Man City and Liverpool were able to get clean sheets from over 50% of all their 38 matches. So, at GW8 someone should be recording 4 clean sheets already. The maximum is 3 though. Still, not a big difference - I do love clean sheets points. But between Man City or Brighton, there's not a big difference yet. Probably we can dismiss expensive Man City goalkeepers and defenders. Who knows? Let's just keep that in mind for now... 
+
+So, who have been the top Goalkeepers this season both in terms of Total Points and ROI?
+
+```{R warning = FALSE, message = FALSE, echo = FALSE}
+library(knitr)
+library(kableExtra)
+kable(as.data.frame(f2 %>% select(Player,Position,Team,TotalPoints,Cost,ROI,CleanSheets,MinutesPlayed) %>% filter(Position=='GLK') %>% arrange(desc(TotalPoints)) %>% head(10))) %>% kable_styling(bootstrap_options = c("striped","condensed","hover"), full_width = F)
+```
+
+Rui Patricio is the one colecting more points so far. But Mathew Ryan is cheaper and has performed very well too. So, I am going to go with him! As a substitute, I should go for Henderson or Pope, but I might adopt a different rational. Liverpool's goalie is as cheap as 4.6M and will play every single match for the top rank team in the Premier League this season. At least until Allison fully recovers.
+
+Before moving onto the next positions, there's something important we need to take into account. Above we saw that minutes played emerges as a key element in the game. So, we want to purchase players who play every week. I don't want to invest my money on a stunning player who will play every two weeks only. 
+
+Having said that, we must watch our back for those coaches who often change their squad. Therefore, we want to select players from teams where their minutes distribution has a high variance. Who are these teams?
+
+```{R warning = FALSE, message = FALSE, echo = FALSE, fig.align="center"}
+var <- as.data.frame(f2 %>% group_by(Team) %>% summarise(Variance=var(MinutesPlayed)) %>% arrange(desc(Variance)))
+both2 <- inner_join(var, tp, by = "Team")
+both2$Points_Rank <- ifelse(both2$Points>=350,"High",ifelse(both2$Points>=300 & both2$Points<350,"Medium","Low"))
+ggdotchart(both2, x = "Team", y = "Variance",
+           color = "Points_Rank",                                # Color by groups
+           palette = c("#00AFBB", "#E7B800", "#FC4E07"), # Custom color palette
+           sorting = "descending",                       # Sort value in descending order
+           rotate = TRUE,                                # Rotate vertically
+           dot.size = 2,                                 # Large dot size
+           y.text.col = TRUE,                            # Color y text by groups
+           ggtheme = theme_pubr()                        # ggplot2 theme
+)+ theme_cleveland() + labs(color="Points Rank")  # Add dashed grids
+```
+
+There are two main contenders to win the title this season - Liverpool and Manchester City. So, I would say that we should pick 3 players from each one. However, I am getting upset with Man City's rotation.  
+
+```{R warning = FALSE, message = FALSE, out.width=c('50%', '50%'), fig.show='hold', echo = F}
+liv <- f2 %>% filter(Team=='LIV')
+mci <- f2 %>% filter(Team=='MCI')
+hist(liv$MinutesPlayed , breaks=8 , col="#C8102E", border=F , xlab="Minutes Played", main="Liverpool")
+hist(mci$MinutesPlayed , breaks=8 , col="#6CABDD", border=F , xlab="Minutes Played", main="Manchester City")
+```
+
+When compared to Liverpool only 20% of Man City players played more than 600 minutes. This number expands to 34% for Liverpool. Therefore, I want to select 3 players from Liverpool for my team, but need to be very conscious when picking up Man City players.
+
+Regarding defenders, what are our choices?
+
+```{R warning = FALSE, message = FALSE, echo = FALSE, fig.align="center"}
+kable(as.data.frame(f2 %>% select(Player,Position,Team,TotalPoints,Cost,ROI,CleanSheets,MinutesPlayed) %>% filter(Position=='DEF' & MinutesPlayed>600) %>% arrange(desc(TotalPoints)) %>% head(10))) %>% kable_styling(bootstrap_options = c("striped","condensed","hover"), full_width = F)
+```
+
+My initially defenders' selection were Trent-Alexander Arnold, Van Dijk, Laporte, Maguire and Van Aanholt. A very solid defense which provided me loads of points. However, it prevented me from having more expensive players in the attack. Their cost was higher than 5.5M for each of them. As seen above, we don't need to spend so much money. I might keep Trent only, but we'll see... 
+
+As a matter of fact, as seen above, defenders are the ones with the highest ROI. I will take this into account and keep some money in my pocket for midfielders and forwards who are the ones who, on average, collect more points.
+
+Concerning midfielders, below there's a list of good options:
+```{R warning = FALSE, message = FALSE, echo = FALSE}
+kable(as.data.frame(f2 %>% select(Player,Position,Team,TotalPoints,Cost,ROI,CleanSheets,MinutesPlayed) %>% filter(Position=='MID' & MinutesPlayed>500) %>% arrange(desc(TotalPoints)) %>% head(10))) %>% kable_styling(bootstrap_options = c("striped","condensed","hover"), full_width = F)
+```
+
+I have always played with Salah but I am feeling tempted to let him go and opt for Sadio Mane as he's cheaper and has summed up a lot of points. 
+In the long run, Salah might achieve more than Mane, but I need to release some money to get more strong options. I believe will be good to diversify my team and reduce the risk of poor games from top players (yeah, they also have some - in GW8 Salah only captured 4 points which is very low for him).
+
+Finally we have the following options to play in the attack:
+```{R warning = FALSE, message = FALSE, echo = FALSE}
+kable(as.data.frame(f2 %>% select(Player,Position,Team,TotalPoints,Cost,ROI,CleanSheets,MinutesPlayed) %>% filter(Position=='FWD' & MinutesPlayed>500) %>% arrange(desc(TotalPoints)) %>% head(10))) %>% kable_styling(bootstrap_options = c("striped","condensed","hover"), full_width = F)
+```
+
+Since the beginning of the season that I've had a cheaper and weaker attack than my mates, though I have ranked at the top position for 5 consecutive game weeks. So, my former strategy of having a solid defense and balanced team was not that bad. Yet I want to try something different now... I want to pick up an astonishing top scorer and see how it goes! 
+
+I have developed a [Shiny dashboard](https://jorg3.shinyapps.io/fantasydashboard/) including not only historical data, but also projections to support all our decisions on transfers. 
+Yet, despite all this analysis, one can only win the league if fortune smiles on him/her!
